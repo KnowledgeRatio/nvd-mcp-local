@@ -150,6 +150,26 @@ function formatCveDetail(vuln) {
   return lines.join("\n");
 }
 
+function formatCveHistory(data) {
+  const total = data.totalResults ?? 0;
+  const changes = data.cveChanges ?? [];
+  if (!changes.length) return `${total} results (showing 0): no change history found.`;
+
+  const lines = [`${total} results (showing ${changes.length}):`];
+  for (const item of changes) {
+    const c = item.change;
+    lines.push(`\n${c.cveId}  [${c.eventName}]  ${c.created?.slice(0, 10) ?? "unknown"}`);
+    if (c.sourceIdentifier) lines.push(`  Source: ${c.sourceIdentifier}`);
+    if (c.details?.length) {
+      for (const d of c.details) {
+        const val = d.newValue ? ` → ${d.newValue}` : d.oldValue ? ` (removed: ${d.oldValue})` : "";
+        lines.push(`  ${d.action ?? ""} ${d.type ?? ""}${val}`.trimEnd());
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 function formatCpeList(data) {
   const total = data.totalResults ?? 0;
   const products = data.products ?? [];
@@ -305,6 +325,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "get_cve_history",
+      description:
+        "Retrieve the change history for CVE records, showing how vulnerabilities have been updated over time",
+      inputSchema: {
+        type: "object",
+        properties: {
+          cve_id: {
+            type: "string",
+            description:
+              "Retrieve change history for a specific CVE identifier (e.g. CVE-2021-44228). Leave empty to query by date range instead.",
+          },
+          change_start_date: {
+            type: "string",
+            description:
+              "Start of the change event date range (ISO 8601, e.g. 2024-01-01T00:00:00.000). Maximum range is 120 days.",
+          },
+          change_end_date: {
+            type: "string",
+            description:
+              "End of the change event date range (ISO 8601, e.g. 2024-03-31T23:59:59.999). Maximum range is 120 days.",
+          },
+          event_name: {
+            type: "string",
+            description:
+              "Filter by event type, e.g. 'Initial Analysis', 'Reanalysis', 'CVE Modified', 'CVE Rejected', 'CVE Translated'.",
+          },
+          results_per_page: {
+            type: "number",
+            description: "Results to return (1–5000, default 20)",
+          },
+          start_index: {
+            type: "number",
+            description: "Zero-based index of the first result to return, used for pagination (default 0)",
+          },
+        },
+      },
+    },
+    {
       name: "get_kev",
       description:
         "Fetch the CISA Known Exploited Vulnerabilities catalog live. No args returns a summary + 10 most recent additions. Filter by keyword, date, or ransomware association.",
@@ -389,6 +447,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.cpe_match_string) params.cpeMatchString = args.cpe_match_string;
         const data = await nvdGet("/cpes/2.0", params);
         return { content: [{ type: "text", text: formatCpeList(data) }] };
+      }
+
+      case "get_cve_history": {
+        const params = {
+          resultsPerPage: Math.min(Math.max(1, args.results_per_page ?? 20), 5000),
+          startIndex: Math.max(0, args.start_index ?? 0),
+        };
+        if (args.cve_id) params.cveId = args.cve_id;
+        if (args.change_start_date) params.changeStartDate = args.change_start_date;
+        if (args.change_end_date) params.changeEndDate = args.change_end_date;
+        if (args.event_name) params.eventName = args.event_name;
+        const data = await nvdGet("/cvehistory/2.0", params);
+        return { content: [{ type: "text", text: formatCveHistory(data) }] };
       }
 
       case "get_kev": {
